@@ -220,7 +220,7 @@ int clusterLoadConfig(char *filename) {
             n = createClusterNode(argv[0],0);
             clusterAddNode(n);
         }
-        /* Format for the node address information: 
+        /* Format for the node address information:
          * ip:port[@cport][,hostname] */
 
         /* Hostname is an optional argument that defines the endpoint
@@ -305,8 +305,14 @@ int clusterLoadConfig(char *filename) {
         }
 
         /* Set ping sent / pong received timestamps */
-        if (atoi(argv[4])) n->ping_sent = mstime();
-        if (atoi(argv[5])) n->pong_received = mstime();
+        if (atoi(argv[4])) {
+            n->ping_sent = mstime();
+            serverLog(LL_NOTICE,"[atoi(argv[4]) was true] set n->ping_sent to %lld", n->ping_sent);
+        }
+        if (atoi(argv[5])) {
+            n->pong_received = mstime();
+            serverLog(LL_NOTICE,"[atoi(argv[5]) was true] set n->pong_received to %lld", n->pong_received);
+        }
 
         /* Set configEpoch for this node.
          * If the node is a replica, set its config epoch to 0.
@@ -431,7 +437,7 @@ int clusterSaveConfig(int do_fsync) {
         ci = sdsgrowzero(ci,sb.st_size);
         memset(ci+content_size,'\n',sb.st_size-content_size);
     }
-    
+
     if (write(fd,ci,sdslen(ci)) != (ssize_t)sdslen(ci)) goto err;
     if (do_fsync) {
         server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
@@ -525,7 +531,7 @@ void deriveAnnouncedPorts(int *announced_port, int *announced_pport,
     *announced_port = port;
     *announced_pport = server.tls_cluster ? server.port : 0;
     *announced_cport = server.cluster_port ? server.cluster_port : port + CLUSTER_PORT_INCR;
-    
+
     /* Config overriding announced ports. */
     if (server.tls_cluster && server.cluster_announce_tls_port) {
         *announced_port = server.cluster_announce_tls_port;
@@ -686,7 +692,7 @@ void clusterInit(void) {
         serverLog(LL_WARNING, "Failed listening on port %u (cluster), aborting.", cport);
         exit(1);
     }
-    
+
     if (createSocketAcceptHandler(&server.cfd, clusterAcceptHandler) != C_OK) {
         serverPanic("Unrecoverable error creating Redis Cluster socket accept handler.");
     }
@@ -1500,13 +1506,24 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     int failures;
     int needed_quorum = (server.cluster->size / 2) + 1;
 
-    if (!nodeTimedOut(node)) return; /* We can reach it. */
-    if (nodeFailed(node)) return; /* Already FAILing. */
+    if (!nodeTimedOut(node)) {
+        serverLog(LL_NOTICE,"[markNodeAsFailingIfNeeded we can reach it] node->name: %.40s, server.cluster->size: %d, needed_quorum: %d",
+            node->name, server.cluster->size, needed_quorum);
+        return; /* We can reach it. */
+    }
+    if (nodeFailed(node)) {
+        serverLog(LL_NOTICE,"[markNodeAsFailingIfNeeded already failing] node->name: %.40s, server.cluster->size: %d, needed_quorum: %d",
+            node->name, server.cluster->size, needed_quorum);
+        return; /* Already FAILing. */
+    }
 
     failures = clusterNodeFailureReportsCount(node);
     /* Also count myself as a voter if I'm a master. */
     if (nodeIsMaster(myself)) failures++;
     if (failures < needed_quorum) return; /* No weak agreement from masters. */
+
+    serverLog(LL_NOTICE,"[markNodeAsFailingIfNeeded] node->name: %.40s, server.cluster->size: %d, failures: %d, needed_quorum: %d",
+        node->name, server.cluster->size, failures, needed_quorum);
 
     serverLog(LL_NOTICE,
         "Marking node %.40s as failing (quorum reached).", node->name);
@@ -1648,6 +1665,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     uint16_t count = ntohs(hdr->count);
     clusterMsgDataGossip *g = (clusterMsgDataGossip*) hdr->data.ping.gossip;
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+    serverLog(LL_NOTICE,"[clusterProcessGossipSection] sender->name: %.40s, count: %d",
+        sender->name, count);
 
     while(count--) {
         uint16_t flags = ntohs(g->flags);
@@ -1988,7 +2007,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
  * The ping/pong/meet messages support arbitrary extensions to add additional
  * metadata to the messages that are sent between the various nodes in the
  * cluster. The extensions take the form:
- * [ Header length + type (8 bytes) ] 
+ * [ Header length + type (8 bytes) ]
  * [ Extension information (Arbitrary length, but must be 8 byte padded) ]
  */
 
@@ -2003,7 +2022,7 @@ static uint32_t getPingExtLength(clusterMsgPingExt *ext) {
 static clusterMsgPingExt *getInitialPingExt(clusterMsg *hdr, uint16_t count) {
     clusterMsgPingExt *initial = (clusterMsgPingExt*) &(hdr->data.ping.gossip[count]);
     return initial;
-} 
+}
 
 /* Given a current ping extension, returns the start of the next extension. May return
  * an invalid address if there are no further ping extensions. */
@@ -2144,7 +2163,7 @@ int clusterProcessPacket(clusterLink *link) {
             while (extensions--) {
                 uint16_t extlen = getPingExtLength(ext);
                 if (extlen % 8 != 0) {
-                    serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)", 
+                    serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)",
                         clusterGetMessageTypeString(type), (int) extlen);
                     return 1;
                 }
@@ -2185,10 +2204,10 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     if (totlen != explen) {
-        serverLog(LL_WARNING, "Received invalid %s packet of length %lld but expected length %lld", 
+        serverLog(LL_WARNING, "Received invalid %s packet of length %lld but expected length %lld",
             clusterGetMessageTypeString(type), (unsigned long long) totlen, (unsigned long long) explen);
         return 1;
-    } 
+    }
 
     sender = getNodeFromLinkAndMsg(link, hdr);
 
@@ -2196,7 +2215,11 @@ int clusterProcessPacket(clusterLink *link) {
      * use this in order to avoid detecting a timeout from a node that
      * is just sending a lot of data in the cluster bus, for instance
      * because of Pub/Sub. */
-    if (sender) sender->data_received = now;
+    if (sender) {
+        sender->data_received = now;
+        serverLog(LL_NOTICE,"[clusterProcessPacket sender true] sender->name: %.40s, set sender->data_received to %lld",
+            sender->name, sender->data_received);
+    }
 
     if (sender && !nodeInHandshake(sender)) {
         /* Update our currentEpoch if we see a newer epoch in the cluster. */
@@ -2364,6 +2387,10 @@ int clusterProcessPacket(clusterLink *link) {
         if (!link->inbound && type == CLUSTERMSG_TYPE_PONG) {
             link->node->pong_received = now;
             link->node->ping_sent = 0;
+            serverLog(LL_NOTICE,"[got pong] link->node->name: %.40s, set link->node->pong_received to now %lld",
+                link->node->name, link->node->pong_received);
+            serverLog(LL_NOTICE,"[got pong] link->node->name: %.40s, set link->node->ping_sent to 0",
+                link->node->name);
 
             /* The PFAIL condition can be reversed without external
              * help if it is momentary (that is, if it does not
@@ -2379,6 +2406,9 @@ int clusterProcessPacket(clusterLink *link) {
                 clearNodeFailureIfNeeded(link->node);
             }
         }
+
+        serverLog(LL_NOTICE,"[clusterProcessPacket 1] link->node->name: %.40s",
+            link->node->name);
 
         /* Check for role switch: slave -> master or master -> slave. */
         if (sender) {
@@ -2416,6 +2446,9 @@ int clusterProcessPacket(clusterLink *link) {
             }
         }
 
+        serverLog(LL_NOTICE,"[clusterProcessPacket 2] link->node->name: %.40s",
+            link->node->name);
+
         /* Update our info about served slots.
          *
          * Note: this MUST happen after we update the master/slave state
@@ -2435,6 +2468,9 @@ int clusterProcessPacket(clusterLink *link) {
                         hdr->myslots,sizeof(hdr->myslots)) != 0;
             }
         }
+
+        serverLog(LL_NOTICE,"[clusterProcessPacket 3] link->node->name: %.40s",
+            link->node->name);
 
         /* 1) If the sender of the message is a master, and we detected that
          *    the set of slots it claims changed, scan the slots to see if we
@@ -2486,6 +2522,9 @@ int clusterProcessPacket(clusterLink *link) {
             }
         }
 
+        serverLog(LL_NOTICE,"[clusterProcessPacket 4] link->node->name: %.40s",
+            link->node->name);
+
         /* If our config epoch collides with the sender's try to fix
          * the problem. */
         if (sender &&
@@ -2495,8 +2534,13 @@ int clusterProcessPacket(clusterLink *link) {
             clusterHandleConfigEpochCollision(sender);
         }
 
+        serverLog(LL_NOTICE,"[clusterProcessPacket 5] link->node->name: %.40s",
+            link->node->name);
+
         /* Get info from the gossip section */
         if (sender) {
+            serverLog(LL_NOTICE,"[clusterProcessPacket going to clusterProcessGossipSection] link->node->name: %.40s",
+                link->node->name);
             clusterProcessGossipSection(hdr,link);
             clusterProcessPingExtensions(hdr,link);
         }
@@ -2681,6 +2725,8 @@ void clusterLinkConnectHandler(connection *conn) {
          * disconnected, we want to restore the ping time, otherwise
          * replaced by the clusterSendPing() call. */
         node->ping_sent = old_ping_sent;
+        serverLog(LL_NOTICE,"[old ping sent] node->name: %.40s, set node->ping_sent to old_ping_sent %lld",
+            node->name, node->ping_sent);
     }
     /* We can clear the flag after the first packet is sent.
      * If we'll never receive a PONG, we'll never send new packets
@@ -2890,6 +2936,8 @@ void clusterSetGossipEntry(clusterMsg *hdr, int i, clusterNode *n) {
     gossip = &(hdr->data.ping.gossip[i]);
     memcpy(gossip->nodename,n->name,CLUSTER_NAMELEN);
     gossip->ping_sent = htonl(n->ping_sent/1000);
+    serverLog(LL_NOTICE,"[clusterSetGossipEntry] nodeName: %.40s, set gossip->ping_sent to %d",
+        n->name, gossip->ping_sent);
     gossip->pong_received = htonl(n->pong_received/1000);
     memcpy(gossip->ip,n->ip,sizeof(n->ip));
     gossip->port = htons(n->port);
@@ -2963,8 +3011,11 @@ void clusterSendPing(clusterLink *link, int type) {
     hdr = (clusterMsg*) buf;
 
     /* Populate the header. */
-    if (!link->inbound && type == CLUSTERMSG_TYPE_PING)
+    if (!link->inbound && type == CLUSTERMSG_TYPE_PING) {
         link->node->ping_sent = mstime();
+        serverLog(LL_NOTICE, "[clusterSendPing] set link->node->name: %.40s, link->node->ping_sent to %lld",
+            link->node->name, link->node->ping_sent);
+    }
     clusterBuildMessageHdr(hdr,type);
 
     /* Populate the gossip fields */
@@ -2995,6 +3046,8 @@ void clusterSendPing(clusterLink *link, int type) {
         /* Do not add a node we already have. */
         if (this->last_in_ping_gossip == cluster_pings_sent) continue;
 
+        serverLog(LL_NOTICE,"[just before clusterSetGossipEntry for this] nodeName: %.40s, gossipcount: %d",
+            this->name, gossipcount);
         /* Add it */
         clusterSetGossipEntry(hdr,gossipcount,this);
         this->last_in_ping_gossip = cluster_pings_sent;
@@ -3013,6 +3066,8 @@ void clusterSendPing(clusterLink *link, int type) {
             if (node->flags & CLUSTER_NODE_HANDSHAKE) continue;
             if (node->flags & CLUSTER_NODE_NOADDR) continue;
             if (!(node->flags & CLUSTER_NODE_PFAIL)) continue;
+            serverLog(LL_NOTICE,"[just before clusterSetGossipEntry for node] nodeName: %.40s, gossipcount: %d",
+                node->name, gossipcount);
             clusterSetGossipEntry(hdr,gossipcount,node);
             gossipcount++;
             /* We take the count of the slots we allocated, since the
@@ -3023,7 +3078,7 @@ void clusterSendPing(clusterLink *link, int type) {
         dictReleaseIterator(di);
     }
 
-    
+
     int totlen = 0;
     int extensions = 0;
     /* Set the initial extension position */
@@ -3936,7 +3991,11 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t handshake_
              * If node->ping_sent is zero, failure detection can't work,
              * so we claim we actually sent a ping now (that will
              * be really sent as soon as the link is obtained). */
-            if (node->ping_sent == 0) node->ping_sent = mstime();
+            if (node->ping_sent == 0) {
+                node->ping_sent = mstime();
+                serverLog(LL_NOTICE,"[clusterNodeCronHandleReconnect] node->name: %.40s, set node->ping_sent to %lld",
+                    node->name, node->ping_sent);
+            }
             serverLog(LL_DEBUG, "Unable to connect to "
                 "Cluster Node [%s]:%d -> %s", node->ip,
                 node->cport, server.neterr);
@@ -4043,7 +4102,7 @@ void clusterCron(void) {
          */
         if(clusterNodeCronHandleReconnect(node, handshake_timeout, now)) continue;
     }
-    dictReleaseIterator(di); 
+    dictReleaseIterator(di);
 
     /* Ping some random node 1 time every 10 iterations, so that we usually ping
      * one random node every second. */
@@ -4112,6 +4171,7 @@ void clusterCron(void) {
          * issue even if the node is alive. */
         mstime_t ping_delay = now - node->ping_sent;
         mstime_t data_delay = now - node->data_received;
+        serverLog(LL_NOTICE,"[clusterCron] node->name: %.40s, ping_delay: %lld, data_delay: %lld", node->name, ping_delay, data_delay);
         if (node->link && /* is connected */
             now - node->link->ctime >
             server.cluster_node_timeout && /* was not already reconnected */
@@ -4161,6 +4221,8 @@ void clusterCron(void) {
          * load pong delays are possible. */
         mstime_t node_delay = (ping_delay < data_delay) ? ping_delay :
                                                           data_delay;
+        serverLog(LL_NOTICE,"[clusterCron] node->name: %.40s, node_delay: %lld, server.cluster_node_timeout: %lld",
+            node->name, node_delay, server.cluster_node_timeout);
 
         if (node_delay > server.cluster_node_timeout) {
             /* Timeout reached. Set the node as possibly failing if it is
@@ -4168,6 +4230,7 @@ void clusterCron(void) {
             if (!(node->flags & (CLUSTER_NODE_PFAIL|CLUSTER_NODE_FAIL))) {
                 serverLog(LL_DEBUG,"*** NODE %.40s possibly failing",
                     node->name);
+                serverLog(LL_NOTICE,"[clusterCron] *** NODE %.40s possibly failing", node->name);
                 node->flags |= CLUSTER_NODE_PFAIL;
                 update_state = 1;
             }
@@ -4914,8 +4977,8 @@ int getSlotOrReply(client *c, robj *o) {
 
 /* Returns an indication if the replica node is fully available
  * and should be listed in CLUSTER SLOTS response.
- * Returns 1 for available nodes, 0 for nodes that have 
- * not finished their initial sync, in failed state, or are 
+ * Returns 1 for available nodes, 0 for nodes that have
+ * not finished their initial sync, in failed state, or are
  * otherwise considered not available to serve read commands. */
 static int isReplicaAvailable(clusterNode *node) {
     if (nodeFailed(node)) {
@@ -4953,7 +5016,7 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (slots[j]) {
             int retval;
-                
+
             /* If this slot was set as importing we can clear this
              * state as now we are the real owner of the slot. */
             if (server.cluster->importing_slots_from[j])
@@ -4981,7 +5044,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     } else {
         serverPanic("Unrecognized preferred endpoint type");
     }
-    
+
     /* Report non-TLS ports to non-TLS client in TLS cluster if available. */
     int use_pport = (server.tls_cluster &&
                      c->conn && connGetType(c->conn) != CONN_TYPE_TLS);
@@ -5013,7 +5076,7 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
     addReplyLongLong(c, start_slot);
     addReplyLongLong(c, end_slot);
     addNodeToNodeReply(c, node);
-    
+
     /* Remaining nodes in reply are replicas for slot range */
     for (i = 0; i < node->numslaves; i++) {
         /* This loop is copy/pasted from clusterGenNodeDescription()
@@ -5336,7 +5399,7 @@ NULL
                 return;
             }
         }
-        clusterUpdateSlots(c, slots, del);    
+        clusterUpdateSlots(c, slots, del);
         zfree(slots);
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE|CLUSTER_TODO_SAVE_CONFIG);
         addReply(c,shared.ok);
