@@ -4253,9 +4253,12 @@ void clusterCron(void) {
     manualFailoverCheckTimeout();
 
     if (nodeIsSlave(myself)) {
+        // serverLog(LL_NOTICE,"[clusterCron] clusterHandleManualFailover-ing");
         clusterHandleManualFailover();
-        if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER))
+        if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
+            // serverLog(LL_NOTICE,"[clusterCron] clusterHandleSlaveFailover-ing");
             clusterHandleSlaveFailover();
+        }
         /* If there are orphaned slaves, and we are a slave among the masters
          * with the max number of non-failing slaves, consider migrating to
          * the orphaned masters. Note that it does not make sense to try
